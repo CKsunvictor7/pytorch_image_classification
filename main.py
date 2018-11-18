@@ -1,8 +1,6 @@
-# import json
 from trainer import runner
 from torchvision.models import alexnet, resnet18, resnet34, resnet50, resnet101, resnet152, vgg16_bn, vgg19_bn
 import config
-# config
 
 # Network_list
 network_list = {
@@ -17,13 +15,6 @@ network_list = {
 
 
 def main():
-    """
-    # read json
-    params = {}
-    with open('training_params.json', 'r') as f:
-        training_params = json.load(f)
-    """
-
     print('training_params: ', config.training_params)
 
     model_name = '{}_{}_{}'. \
