@@ -1,46 +1,56 @@
 """
-
----
-class imbalanced => balance sampler
-1    1448
-0     847
-total = 2,295 = 1,836(train) + 459(val)
-* 1154x866
-* .jpg
-
-name,invasive
-1,0
-2,0
-3,1
-4,0
-5,1
+a pytorch classification template
 """
 import os
 import pandas as pd
-import numpy as np
 import torch
-import torch.utils.data as data   # dataloader
+import torch.utils.data as data
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, models, transforms
-from torch.autograd import Variable
 from utils import splitter_df
 from PIL import Image
 
+# Device configuration
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-IS_VAL = True
-csv_file = 'data/train_labels.csv'
-train_img_dir = 'data/train'
-test_img_dir = 'data/test'
+
+CSV_PATH = 'data/train_labels.csv'
+TRAINING_DIR = 'data/train'
+TEST_DIR = 'data/test'
 
 
 def load_img(img_path):
+    """
+    read img_path and return as PIL.image format
+    :param img_path:
+    :return:
+    """
     with open(img_path, 'rb') as f:
         with Image.open(f) as img_f:
             return img_f.convert('RGB')
 
 
-class Invasive_DB(data.Dataset):
+class InvasiveDB(data.Dataset):
+    """
+    data input pipeline of InvasiveDB
+    Invasive_DB:
+
+    class imbalanced
+    1    1448
+    0     847
+    total = 2,295 = 1,836(train) + 459(val)
+    * 1154x866
+    * .jpg
+
+    label format
+    name,invasive
+    1,0
+    2,0
+    3,1
+    4,0
+    5,1
+    """
     def __init__(self, list_file, transforms=None):
         """
         load a list of files, not data
@@ -60,8 +70,8 @@ class Invasive_DB(data.Dataset):
             img: torch.tensor (PIL -> transform.toTensor)
             label: list of scalar (DataFrame -> list)
         """
-        img_name = os.path.join(train_img_dir,
-                        str(self.list.loc[idx, 'name']) + '.jpg')
+        img_name = os.path.join(TRAINING_DIR,
+                                str(self.list.loc[idx, 'name']) + '.jpg')
         img = load_img(img_name)
         if self.transforms:
             img = self.transforms(img)
@@ -72,13 +82,15 @@ class Invasive_DB(data.Dataset):
     def __len__(self):
         return len(self.list)
 
-data_transforms = {
+
+DATA_TRANSFORMATION = {
     'train': transforms.Compose([
         # transforms.RandomSizedCrop(224),
         # transforms.Resize((320, 320)),
         # transforms.RandomResizedCrop((224,224)),
         transforms.Resize((224, 224)),
-        transforms.RandomRotation((-50, 50), resample=False, expand=False, center=None),
+        transforms.RandomRotation(
+            (-50, 50), resample=False, expand=False, center=None),
         # transforms.ColorJitter(brightness=0, contrast=0, saturation=0, hue=0),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
@@ -100,23 +112,31 @@ def runner(net, nb_epochs, batch_size, model_dir, model_name, learning_rate):
     print(df.loc[1,'name'])
     # print(df['invasive'].value_counts())
     """
-    df = pd.read_csv(csv_file)
+    print('current device = ', device)
+
+    df = pd.read_csv(CSV_PATH)
     # train_list, val_list = [], []
-    if IS_VAL:
-        train_df, val_df = splitter_df(df, rate=0.8)
-    else:
-        train_df = df
+    train_df, val_df = splitter_df(df, rate=0.8)
 
     # data loader
-    dataset = {'train':Invasive_DB(train_df, data_transforms['train']),
-               'val':Invasive_DB(val_df, data_transforms['train'])}
+    dataset = {'train': InvasiveDB(train_df, DATA_TRANSFORMATION['train']),
+               'val': InvasiveDB(val_df, DATA_TRANSFORMATION['train'])}
 
     # test if data loader works or not
     print("nb of the train_DB is ", len(dataset['train']))
     print("nb of the val_DB is ", len(dataset['val']))
 
-    data_loaders = {'train': torch.utils.data.DataLoader(dataset['train'], batch_size=batch_size, shuffle=True, num_workers=4),
-                    'val':torch.utils.data.DataLoader(dataset['val'], batch_size=batch_size, shuffle=False, num_workers=4)}
+    data_loaders = {
+        'train': torch.utils.data.DataLoader(
+            dataset['train'],
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=4),
+        'val': torch.utils.data.DataLoader(
+            dataset['val'],
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=4)}
 
     # fine-tuning
     net_ft = net(pretrained=True)
@@ -124,16 +144,19 @@ def runner(net, nb_epochs, batch_size, model_dir, model_name, learning_rate):
     # find the name of last layer, @resnet18
     # = self.fc: nn.Linear(512 * block.expansion, num_classes)）
     # and replace it with new layer
-    net_ft.fc = nn.Sequential(nn.Linear(net_ft.fc.in_features, out_features=2), nn.Sigmoid())
-    # put into gpu
-    net_ft = net_ft.cuda()
+    net_ft.fc = nn.Sequential(
+        nn.Linear(
+            net_ft.fc.in_features,
+            out_features=2),
+        nn.Sigmoid())
 
-    """
-    # to train only last layer, set other layers' requires_grad as False 
-    for para in list(model_ft.parameters())[:-2]:
-        para.requires_grad = False
-    """
-    # TODO:nn.BCELoss()
+    # put model into device
+    net_ft = net_ft.to(device)
+
+    # to train only last layer, set other layers' requires_grad as False
+    # for para in list(model_ft.parameters())[:-2]:
+    #    para.requires_grad = False
+
     loss_func = nn.CrossEntropyLoss()
     optimizer = optim.Adam(net_ft.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -144,7 +167,7 @@ def runner(net, nb_epochs, batch_size, model_dir, model_name, learning_rate):
     best_acc = 0.0
     # early stopping config
     ES_obs_times = 5
-    ES_monitor_value = 'training_loss' # 'training_loss' or  'val_acc'
+    ES_monitor_value = 'training_loss'  # 'training_loss' or  'val_acc'
     last_n_epoches = []
 
     for epoch in range(nb_epochs):
@@ -166,16 +189,20 @@ def runner(net, nb_epochs, batch_size, model_dir, model_name, learning_rate):
                 # convert tensor to variable
                 # .cuda(): put data into gpu
                 # labels: list -> Variable contains torch.LongTensor
-                imgs, labels = Variable(imgs.cuda()), Variable(labels.cuda())
+                imgs = imgs.to(device)
+                labels = labels.to(device)
+                #Variable(imgs.cuda()), Variable(labels.cuda())
 
                 # set previous grad to zero
                 optimizer.zero_grad()
-                # outputs: Variable contains torch.FloatTensor of (batch_size, nb of class)
+                # outputs: Variable contains torch.FloatTensor of (batch_size,
+                # nb of class)
                 outputs = net_ft(imgs)
 
                 # loss is Variable contains torch.FloatTensor of size 1
                 loss = loss_func(outputs, labels)
-                # Use tensor.item() to convert a 0-dim tensor to a Python number
+                # Use tensor.item() to convert a 0-dim tensor to a Python
+                # number
                 running_loss += loss.data.item()
 
                 # compute hits:
@@ -190,7 +217,6 @@ def runner(net, nb_epochs, batch_size, model_dir, model_name, learning_rate):
                 # if tensor, output is scalar value
                 running_hits += torch.sum(preds.data == labels.data)
 
-
                 if phase == 'train':
                     # back propagation, compute gradient
                     loss.backward()
@@ -198,8 +224,8 @@ def runner(net, nb_epochs, batch_size, model_dir, model_name, learning_rate):
                     optimizer.step()
 
             # after one epoch
-            epoch_loss = running_loss/len(dataset[phase])
-            epoch_acc = running_hits.item()/len(dataset[phase])
+            epoch_loss = running_loss / len(dataset[phase])
+            epoch_acc = running_hits.item() / len(dataset[phase])
 
             # lr_scheduler update
             scheduler.step(epoch_loss)
@@ -211,7 +237,8 @@ def runner(net, nb_epochs, batch_size, model_dir, model_name, learning_rate):
                 print('new best val_Acc, save the model')
                 # remove the previous model
                 if best_acc != 0.0:
-                    model_name_w_acc = "{}_{:.4f}.pkl".format(model_name, best_acc)
+                    model_name_w_acc = "{}_{:.4f}.pkl".format(
+                        model_name, best_acc)
                     os.remove(os.path.join(model_dir, model_name_w_acc))
 
                 best_acc = epoch_acc
@@ -230,9 +257,9 @@ def runner(net, nb_epochs, batch_size, model_dir, model_name, learning_rate):
                     last_n_epoches.clear()
                 last_n_epoches.append(epoch_loss)
 
-        if len(last_n_epoches) == (ES_obs_times+1):
+        if len(last_n_epoches) == (ES_obs_times + 1):
             print('early stopping by {} with the best validation accuracy:{}'.
-                format(ES_monitor_value, best_acc))
+                  format(ES_monitor_value, best_acc))
             break
 
         print('-' * 10)
